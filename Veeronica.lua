@@ -3,70 +3,67 @@ local LocalPlayer = game:GetService("Players").LocalPlayer
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 
--- ตัวแปรเก็บสถานะการเปิด/ปิด (เปลี่ยนค่าเป็น true เพื่อเปิด หรือ false เพื่อปิด)
-getgenv().AutoTrickEnabled = false
+local deviceType = not (UserInputService.KeyboardEnabled and UserInputService.MouseEnabled) and "Mobile" or "PC"
+local behaviorFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Survivors"):WaitForChild("Veeronica"):WaitForChild("Behavior")
+local getDescendantsFunc = behaviorFolder.GetDescendants
 
-local u90 = not (UserInputService.KeyboardEnabled and UserInputService.MouseEnabled) and "Mobile" or "PC"
-local Behavior = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Survivors"):WaitForChild("Veeronica"):WaitForChild("Behavior")
-local GetDescendants = Behavior.GetDescendants
-
-local function v93()
+local function getSprintButton()
     return LocalPlayer.PlayerGui:WaitForChild("MainUI"):WaitForChild("SprintingButton")
 end
 
-local t2 = {}
+local activeHighlights = {}
 
-local function v95(p11)
-    if not p11 or t2[p11] then
+local function setupHighlight(highlightObj)
+    if not highlightObj or activeHighlights[highlightObj] then
         return
     end
 
-    local t3 = {}
+    local connectionsList = {}
 
-    local function v260()
-        for _, v in ipairs(t3) do
-            if v and v.Connected then
-                v:Disconnect()
+    local function cleanupHighlight()
+        for _, connection in ipairs(connectionsList) do
+            if connection and connection.Connected then
+                connection:Disconnect()
             end
         end
-        t2[p11] = nil
+        activeHighlights[highlightObj] = nil
     end
 
-    local function v261()
-        -- เช็คก่อนว่าฟังก์ชันถูกเปิดใช้งานอยู่หรือไม่
-        if not getgenv().AutoTrickEnabled then
+    local function processHighlight()
+        -- ถ้าสคริปต์ถูกปิดการทำงานแล้ว ให้หยุดทำงานทันที
+        if getgenv().VeeronicaAutoTrickStopped then
             return
         end
 
-        if not p11.Parent then
-            v260()
+        if not highlightObj.Parent then
+            cleanupHighlight()
             return
         end
 
-        local p11Adornee = p11.Adornee
-        local Character = LocalPlayer.Character
+        local adorneeTarget = highlightObj.Adornee
+        local character = LocalPlayer.Character
 
-        if not (not p11Adornee or not Character) and (p11Adornee == Character or p11Adornee:IsDescendantOf(Character)) and true then
-            if u90 == "Mobile" then
-                local ok, result = pcall(v93)
+        if not (not adorneeTarget or not character) and (adorneeTarget == character or adorneeTarget:IsDescendantOf(character)) and true then
+            if deviceType == "Mobile" then
+                local success, sprintBtn = pcall(getSprintButton)
 
-                if ok and result then
-                    for _, v in pairs(getconnections(result.MouseButton1Down)) do
-                        local v367 = v
+                if success and sprintBtn then
+                    for _, conn in pairs(getconnections(sprintBtn.MouseButton1Down)) do
+                        local currentConn = conn
 
                         pcall(function()
-                            v367:Fire()
+                            currentConn:Fire()
                         end)
                         pcall(function()
-                            if v367.Function then
-                                v367:Function()
+                            if currentConn.Function then
+                                currentConn:Function()
                             end
                         end)
                     end
 
                     return
                 end
-            elseif u90 == "PC" then
+            elseif deviceType == "PC" then
                 pcall(function()
                     VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
                     task.wait()
@@ -76,55 +73,48 @@ local function v95(p11)
         end
     end
 
-    table.insert(t3, p11:GetPropertyChangedSignal("Adornee"):Connect(v261))
-    table.insert(t3, p11.AncestryChanged:Connect(function(_, parent)
+    table.insert(connectionsList, highlightObj:GetPropertyChangedSignal("Adornee"):Connect(processHighlight))
+    table.insert(connectionsList, highlightObj.AncestryChanged:Connect(function(_, parent)
         if not parent then
-            v260()
+            cleanupHighlight()
             return
         end
-        v261()
+        processHighlight()
     end))
-    table.insert(t3, LocalPlayer.CharacterAdded:Connect(v261))
-    t2[p11] = v260
-    task.spawn(v261)
+    table.insert(connectionsList, LocalPlayer.CharacterAdded:Connect(processHighlight))
+    activeHighlights[highlightObj] = cleanupHighlight
+    task.spawn(processHighlight)
 end
 
--- ฟังก์ชันสำหรับสั่งเปิดการทำงาน
-local function StartAutoTrick()
-    getgenv().AutoTrickEnabled = true
+-- เริ่มต้นการทำงานของ Auto Trick
+getgenv().VeeronicaAutoTrickStopped = false
 
-    for _, v in ipairs(GetDescendants(Behavior)) do
-        if v:IsA("Highlight") then
-            v95(v)
+for _, v in ipairs(getDescendantsFunc(behaviorFolder)) do
+    if v:IsA("Highlight") then
+        setupHighlight(v)
+    end
+end
+
+if not getgenv().VeeronicaDescendantConn then
+    getgenv().VeeronicaDescendantConn = behaviorFolder.DescendantAdded:Connect(function(descendant)
+        if not getgenv().VeeronicaAutoTrickStopped and descendant:IsA("Highlight") then
+            setupHighlight(descendant)
         end
-    end
-
-    if not getgenv().AutoTrickConnection then
-        getgenv().AutoTrickConnection = Behavior.DescendantAdded:Connect(function(descendant)
-            if getgenv().AutoTrickEnabled and descendant:IsA("Highlight") then
-                v95(descendant)
-            end
-        end)
-    end
+    end)
 end
 
--- ฟังก์ชันสำหรับสั่งปิดการทำงานและเคลียร์ระบบ
-local function StopAutoTrick()
-    getgenv().AutoTrickEnabled = false
+-- ฟังก์ชันเคลียร์ค่าเมื่อปิดการใช้งาน (ผูกกับตอนกดปิดปุ่ม Topbar ได้)
+getgenv().StopVeeronicaScript = function()
+    getgenv().VeeronicaAutoTrickStopped = true
 
-    if getgenv().AutoTrickConnection then
-        getgenv().AutoTrickConnection:Disconnect()
-        getgenv().AutoTrickConnection = nil
+    if getgenv().VeeronicaDescendantConn then
+        getgenv().VeeronicaDescendantConn:Disconnect()
+        getgenv().VeeronicaDescendantConn = nil
     end
 
-    for _, v in pairs(t2) do
-        v()
+    for _, cleanupFunc in pairs(activeHighlights) do
+        cleanupFunc()
     end
 
-    table.clear(t2)
+    table.clear(activeHighlights)
 end
-
--- วิธีใช้งาน:
--- เปิดใช้งาน: StartAutoTrick()
--- ปิดใช้งาน: StopAutoTrick()
-  
